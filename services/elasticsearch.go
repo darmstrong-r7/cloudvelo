@@ -460,6 +460,74 @@ func GetElasticRecordByQuery(
 	return nil, makeReadElasticError(data)
 }
 
+// Gets a single elastic record by key/id and doc_type.
+func GetElasticRecordByDocType(
+	ctx context.Context, org_id, index_suffix, key, id, doc_type string) (json.RawMessage, error) {
+	defer Debug("GetElasticRecordByDocType %v %v %v", key, id, doc_type)()
+	defer Instrument("GetElasticRecordByDocType")()
+
+	var query = `
+{
+    "query": {
+        "bool": {
+            "must": [
+                {
+                    "match": {%q: %q}
+                }, {
+                    "match": {"doc_type": %q}
+                }
+            ]
+        }
+    },
+    "sort": [
+      {
+        "timestamp": {
+          "order": "desc"
+        }
+      }
+    ],
+    "size": 1
+}
+`
+
+	client, err := GetElasticClient()
+	if err != nil {
+		return nil, err
+	}
+	index := GetIndex(org_id, index_suffix)
+	body := json.Format(query, key, id, doc_type)
+	res, err := opensearchapi.SearchRequest{
+		Index: []string{index},
+		Body:  strings.NewReader(body),
+	}.Do(ctx, client)
+	if err != nil {
+		return nil, err
+	}
+	defer res.Body.Close()
+
+	data, err := ioutil.ReadAll(res.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	// All is well we don't need to parse the results
+	if !res.IsError() {
+		hit := &_ElasticResponse{}
+		err := json.Unmarshal(data, hit)
+		if hit.Hits.Total.Value > 0 {
+			return hit.Hits.Hits[0].Source, err
+		} else if err == nil {
+			return nil, os.ErrNotExist
+		} else {
+			return nil, err
+		}
+	}
+
+	response := ordereddict.NewDict()
+	err = response.UnmarshalJSON(data)
+	return nil, makeReadElasticError(data)
+}
+
 // Gets a single elastic record by id.
 func GetElasticRecord(
 	ctx context.Context, org_id, index, id string) (json.RawMessage, error) {
